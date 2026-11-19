@@ -838,10 +838,13 @@ def history_notice(proj, cps):
 # ---------- 목록 출력 ----------
 
 def project_status(key, entry, ctx):
+    """목록 한 줄의 재료. 세 가지를 따로 본다 — 문서가 있는가, 원 대화(트랜스크립트)가 남았는가,
+    이 실행 폴더의 프로젝트인가. resume 가능 여부는 원 대화가 남았는가와 같다(ID resume은 폴더를 가리지 않는다)."""
     problems = entry_problems(entry)
     if problems:
-        return {"key": key, "where": "elsewhere", "registered_here": False, "updated": "", "one_line": "",
-                "workdir": None, "handoff_doc": None, "last_session_id": None, "latest_checkpoint": None,
+        return {"key": key, "where": "elsewhere", "this_folder": False, "launch_inside": False,
+                "registered_here": False, "updated": "", "one_line": "", "workdir": None, "handoff_doc": None,
+                "doc_exists": False, "last_session_id": None, "transcript_exists": False, "latest_checkpoint": None,
                 "resumable": False, "run_from": None, "issues": problems}
     workdir = norm(entry["workdir"])
     doc = os.path.join(workdir, entry["handoff_doc"])
@@ -850,13 +853,8 @@ def project_status(key, entry, ctx):
     last_path = find_transcript(last)
     last_dir = norm(os.path.dirname(last_path)) if last_path else None
     here_dir = ctx["project_dir"]
-
-    if here_dir in (reg_dir, last_dir):
-        where = "here"
-    elif inside(ctx["launch_cwd"], workdir):
-        where = "inside"
-    else:
-        where = "elsewhere"
+    launch_inside = inside(ctx["launch_cwd"], workdir)
+    this_folder = launch_inside or here_dir in (reg_dir, last_dir)
 
     issues = []
     if not os.path.isdir(workdir):
@@ -864,22 +862,26 @@ def project_status(key, entry, ctx):
     elif not os.path.isfile(doc):
         issues.append("핸드오프 문서 없음: %s" % doc)
     if last and not last_path:
-        issues.append("마지막 세션 %s 트랜스크립트 없음" % last[:8])
+        issues.append("마지막 세션 %s 트랜스크립트 없음 (Claude Code가 정리했을 수 있다)" % last[:8])
     if last_dir and reg_dir and last_dir != reg_dir:
         issues.append("transcript_dir 불일치 — 등록 %s / 마지막 세션 실제 %s"
                       % (os.path.basename(reg_dir), os.path.basename(last_dir)))
 
     return {
         "key": key,
-        "where": where,
+        "where": "here" if this_folder else "elsewhere",
+        "this_folder": this_folder,
+        "launch_inside": launch_inside,
         "registered_here": reg_dir == here_dir,
         "updated": entry.get("updated") or "",
         "one_line": entry.get("one_line") or "",
         "workdir": workdir,
         "handoff_doc": doc,
+        "doc_exists": os.path.isfile(doc),
         "last_session_id": last,
+        "transcript_exists": bool(last_path),
         "latest_checkpoint": entry.get("latest_checkpoint"),
-        "resumable": bool(last_dir and last_dir == here_dir),
+        "resumable": bool(last_path),
         "run_from": first_cwd(last_path) if last_path else None,
         "issues": issues,
     }
@@ -901,40 +903,34 @@ def describe_session(ctx):
     return s
 
 
-GROUPS = [
-    ("here", "● 이 폴더에서 이어받기·갱신"),
-    ("inside", "◐ 작업 폴더 안에서 실행됨 — 지난 세션 resume은 다른 폴더"),
-    ("elsewhere", "○ 다른 폴더에서 실행해야 함"),
-]
+def mark(flag):
+    return "✓" if flag else "✗"
 
 
 def print_list(r):
     ctx, states = r["context"], r["projects"]
     print("실행 폴더  %s" % ctx["launch_cwd"])
-    print("현재 세션  %s" % describe_session(ctx))
+    print("현재 세션  %s · 묶인 프로젝트 %s" % (describe_session(ctx), r.get("bound") or "없음"))
     if not states:
         print("\n등록된 프로젝트가 없다 (%s)" % REGISTRY)
         return
     width = max(len(s["key"]) for s in states)
     pad = " " * width
-    for tier, head in GROUPS:
-        items = sorted((s for s in states if s["where"] == tier), key=lambda s: s["updated"], reverse=True)
+    for here, head in ((True, "이 폴더의 프로젝트"), (False, "다른 폴더의 프로젝트")):
+        items = sorted((s for s in states if s["this_folder"] == here), key=lambda s: s["updated"], reverse=True)
         if not items:
             continue
         print("\n%s (%d)" % (head, len(items)))
         for s in items:
-            if tier == "here":
-                if s["resumable"]:
-                    tail = "resume %s" % s["last_session_id"]
-                else:
-                    tail = "resume ✗ (지난 세션은 %s)" % (s["run_from"] or "?")
-            else:
-                tail = "→ %s 에서 실행" % (s["run_from"] or s["workdir"] or "?")
-            stamp = (s["updated"] or "----------")[:10]
-            cp = s["latest_checkpoint"] or "C----"
-            print("  %-*s  %s  %s  %s" % (width, s["key"], stamp, cp, tail))
+            print("  %-*s  %-5s  %-16s  문서 %s  원 대화 %s" % (
+                width, s["key"], s["latest_checkpoint"] or "C----", (s["updated"] or "-")[:16].replace("T", " "),
+                mark(s["doc_exists"]), mark(s["transcript_exists"]) if s["last_session_id"] else "-"))
             if s["one_line"]:
                 print("  %s  %s" % (pad, short(s["one_line"], 90)))
+            if not here and s["workdir"]:
+                print("  %s  작업 폴더 %s" % (pad, s["workdir"]))
+            if s["transcript_exists"]:
+                print("  %s  원 대화 cd %s && claude --resume %s" % (pad, s["run_from"] or s["workdir"], s["last_session_id"]))
     flagged = [s for s in states if s["issues"]]
     if flagged:
         print("\n⚠ 점검")
@@ -1247,7 +1243,9 @@ def cmd_show(a):
 def cmd_list(a):
     ctx = current_context(a.session_id, a.cwd)
     states = [project_status(k, e, ctx) for k, e in load_registry()["projects"].items()]
-    return {"status": "ok", "context": ctx, "projects": states}
+    sid = ctx["session_id"] if valid_sid(ctx["session_id"]) else None
+    return {"status": "ok", "context": ctx, "bound": read_binding(sid).get("current") if sid else None,
+            "projects": states}
 
 
 def cmd_resolve(a):

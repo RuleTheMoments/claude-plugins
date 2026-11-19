@@ -1,8 +1,8 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "baton",
-  "version": "0.3.0",
-  "description": "프로젝트별 세션 핸드오프: /handon(이어받기와 세션 이름 붙이기), /handoff(갱신), /handlist(Claude 실행 폴더 기준 목록)",
+  "version": "0.4.0",
+  "description": "프로젝트별 세션 핸드오프: /handon(읽기 전용 이어받기), /handoff(체크포인트 저장 — 목표·결정·계획 변경은 승인), /handlist(목록)",
   "author": {
     "name": "Arena",
     "url": "https://github.com/RuleTheMoments"
