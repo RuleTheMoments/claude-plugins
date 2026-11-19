@@ -1,0 +1,25 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "rulethemoments",
+  "description": "Arena가 만든 Claude Code 플러그인 모음",
+  "owner": {
+    "name": "Arena",
+    "url": "https://github.com/RuleTheMoments"
+  },
+  "plugins": [
+    {
+      "name": "baton",
+      "description": "프로젝트별 세션 핸드오프: /handon(이어받기와 세션 이름 붙이기), /handoff(갱신), /handlist(Claude 실행 폴더 기준 목록)",
+      "version": "0.3.0",
+      "author": {
+        "name": "Arena",
+        "url": "https://github.com/RuleTheMoments"
+      },
+      "source": "./plugins/baton",
+      "category": "productivity",
+      "homepage": "https://github.com/RuleTheMoments/claude-plugins/tree/main/plugins/baton",
+      "license": "MIT",
+      "keywords": ["handoff", "session", "resume", "continuity"]
+    }
+  ]
+}

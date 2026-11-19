@@ -1,0 +1,16 @@
+{
+  "description": "/handon <프로젝트> 때 세션 이름을 프로젝트 이름으로 붙이고, H title로 대기시킨 이름을 다음 입력 때 적용한다",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -x /usr/bin/python3 ]; then P=/usr/bin/python3; else P=python3; fi; \"$P\" -I \"${CLAUDE_PLUGIN_ROOT}/scripts/handoff.py\" hook",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

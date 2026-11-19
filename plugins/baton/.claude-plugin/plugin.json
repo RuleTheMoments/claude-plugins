@@ -1,0 +1,14 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "baton",
+  "version": "0.3.0",
+  "description": "프로젝트별 세션 핸드오프: /handon(이어받기와 세션 이름 붙이기), /handoff(갱신), /handlist(Claude 실행 폴더 기준 목록)",
+  "author": {
+    "name": "Arena",
+    "url": "https://github.com/RuleTheMoments"
+  },
+  "homepage": "https://github.com/RuleTheMoments/claude-plugins/tree/main/plugins/baton",
+  "repository": "https://github.com/RuleTheMoments/claude-plugins",
+  "license": "MIT",
+  "keywords": ["handoff", "session", "resume", "continuity"]
+}
