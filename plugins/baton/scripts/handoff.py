@@ -1265,9 +1265,12 @@ def cmd_resolve(a):
 
 
 def cmd_current(a):
+    """현재 세션. bound는 이 세션이 묶인 프로젝트 — push 대상을 문서를 고치기 전에 알 수 있게 읽기만 한다."""
     ctx = current_context(a.session_id, a.cwd)
     r = dict(ctx)
     r["status"] = "ok"
+    sid = ctx["session_id"] if valid_sid(ctx["session_id"]) else None
+    r["bound"] = read_binding(sid).get("current") if sid else None
     return r
 
 
@@ -1276,6 +1279,7 @@ def print_current(r):
     print("세션 ID    %s" % (r["session_id"] or "?"))
     print("실행 폴더  %s" % r["launch_cwd"])
     print("트랜스크립트 폴더  %s" % r["project_dir"])
+    print("묶인 프로젝트  %s" % (r.get("bound") or "없음 — pull 또는 push 하면 묶인다"))
 
 
 def cmd_title(a):

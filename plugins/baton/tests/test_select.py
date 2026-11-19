@@ -134,6 +134,22 @@ class PushTargetTest(BatonCase):
         self.assertStatus(p, d, "ok")
         self.assertEqual(d["key"], "beta")
 
+    def test_current_shows_the_binding_without_changing_it(self):
+        w = self.make_project("alpha")
+        self.register("alpha", w)
+        p, d = self.jh("current", sid=S1)
+        self.assertStatus(p, d, "ok")
+        self.assertIsNone(d["bound"])
+        self.pull("alpha", sid=S1)
+        self.assertEqual(self.jh("current", sid=S1)[1]["bound"], "alpha")
+        self.assertIsNone(self.jh("current", sid=S2)[1]["bound"])
+        # current는 기준을 바꾸지 않는다 — 그 사이 다른 세션의 push는 여전히 충돌로 잡힌다
+        self.write_doc(w, make_doc(status="- S2"))
+        self.assertStatus(*self.push("alpha", sid=S2), "ok")
+        self.jh("current", sid=S1)
+        self.write_doc(w, make_doc(status="- S1"))
+        self.assertStatus(*self.push(sid=S1), "conflict")
+
     def test_binding_belongs_to_one_session(self):
         w = self.make_project("alpha")
         self.register("alpha", w)
