@@ -863,6 +863,33 @@ def write_checkpoint(proj, cps, fields, doc_bytes, plan_bytes):
     return meta
 
 
+def fixed_comparison(proj, latest):
+    """작업 문서의 고정층을 마지막 체크포인트와 견준다 → (상태, 사유, diff, 문서가 바뀌었는가).
+    same·differs·no_base(견줄 체크포인트가 없음)·unavailable(읽지 못해 견줄 수 없음).
+    읽기만 한다. 체크포인트는 그 시점의 사본일 뿐 누가 승인했는지의 증거가 아니므로, 어느 쪽이 맞는지는 정하지 않는다."""
+    try:
+        doc_bytes = read_bytes(proj.doc)
+        plan_bytes = read_bytes(proj.plan) if proj.plan else None
+    except OSError as e:
+        return "unavailable", "문서를 읽지 못했다: %s" % e, None, None
+    if doc_bytes is None:
+        return "unavailable", "핸드오프 문서가 없다: %s" % proj.doc, None, None
+    if proj.plan and plan_bytes is None:
+        return "unavailable", "계획 파일이 없다: %s" % proj.plan, None, None
+    try:
+        now = fixed_view(exact_text(doc_bytes), exact_text(plan_bytes), proj.plan_rel)
+        if not latest:
+            return "no_base", None, None, None
+        old_doc, old_plan = checkpoint_bytes(proj, latest)
+        then = fixed_view(exact_text(old_doc), exact_text(old_plan), latest.get("plan_doc"))
+    except Fail as f:
+        return "unavailable", f.result.get("message"), None, None
+    changed = (sha256(doc_bytes), sha256(plan_bytes)) != (latest.get("doc_hash"), latest.get("plan_hash"))
+    if now == then:
+        return "same", None, None, changed
+    return "differs", None, udiff(then, now, latest["id"] + " 고정층", "현재 문서 고정층"), True
+
+
 def history_notice(proj, cps):
     """레지스트리는 체크포인트를 기억하는데 목록이 비었다 — .baton이 지워졌을 가능성."""
     if not cps and proj.entry.get("latest_checkpoint"):
@@ -1089,6 +1116,12 @@ def cmd_pull(a):
     if sid and not bound:  # 문서는 읽었다. 그러나 다음 키 없는 저장이 이전 프로젝트로 갈 수 있다
         notices.append("%s 문서는 읽었지만 이 세션을 %s에 묶지 못했다%s — 저장할 때는 키를 준다"
                        % (key, key, " (묶여 있던 프로젝트: %s)" % previous if previous and previous != key else ""))
+    fixed_state, fixed_note, fixed_diff, doc_changed = fixed_comparison(proj, latest)
+    if fixed_state == "differs":
+        notices.append("작업 문서의 고정층(목표·하지 않을 것·결정·계획)이 %s와 다르다 — 체크포인트에 없는 변경이고, "
+                       "어느 쪽이 맞는지는 정해지지 않았다" % latest["id"])
+    elif fixed_state == "unavailable":
+        notices.append("고정층을 마지막 체크포인트와 견주지 못했다 — %s" % fixed_note)
     entry = proj.entry
     status = project_status(key, entry, ctx)
     result = {
@@ -1107,6 +1140,7 @@ def cmd_pull(a):
         "last_session_id": entry.get("last_session_id"),
         "resumable": status["resumable"],
         "bound": bound,
+        "fixed_state": fixed_state, "fixed_note": fixed_note, "fixed_diff": fixed_diff, "doc_changed": doc_changed,
         "issues": status["issues"],
         "notices": notices,
     }

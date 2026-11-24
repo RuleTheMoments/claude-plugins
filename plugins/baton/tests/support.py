@@ -234,6 +234,13 @@ class BatonCase(unittest.TestCase):
         args = ["push"] + ([key] if key else []) + list(flags)
         return self.jh(*args, sid=sid, cwd=cwd, env=env)
 
+    def save(self, key, *, sid, cwd=None):
+        """고정층이 바뀐 저장까지 끝낸다 — 사용자가 diff를 보고 저장하기로 한 경우."""
+        p, d = self.push(key, sid=sid, cwd=cwd)
+        if d.get("status") == "needs_approval":
+            p, d = self.push(key, "--approve-plan-change", sid=sid, cwd=cwd)
+        return p, d
+
     def pull(self, key=None, *, sid, cwd=None):
         args = ["pull"] + ([key] if key else [])
         p, d = self.jh(*args, sid=sid, cwd=cwd)
