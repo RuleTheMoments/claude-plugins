@@ -293,12 +293,15 @@ def backup_info():
     path = registry_target() + ".bak"
     if not os.path.isfile(path):
         return None
+    count = 0
     try:
         with open(path, "rb") as f:
-            valid = registry_shape_ok(json.loads(f.read().decode("utf-8")))
+            data = json.loads(f.read().decode("utf-8"))
+        valid = registry_shape_ok(data)
+        count = len(data["projects"]) if valid else 0
     except (OSError, ValueError):
         valid = False
-    return {"path": path, "valid": valid}
+    return {"path": path, "valid": valid, "projects": count}
 
 
 def load_registry():
@@ -306,7 +309,14 @@ def load_registry():
         with open(REGISTRY, "rb") as f:
             raw = f.read()
     except FileNotFoundError:
-        return {"projects": {}}  # 처음 쓰는 사람: 등록 전에도 list·resolve가 동작한다
+        # 처음 쓰는 사람은 등록 전에도 list·resolve가 동작한다. 다만 본문만 사라지고 프로젝트가 든 백업이 남아 있으면
+        # 새로 시작하지 않는다 — 다음다음 쓰기가 그 백업을 덮는다
+        backup = backup_info()
+        if backup and backup["valid"] and backup["projects"]:
+            raise error("registry_missing", "레지스트리 파일이 없는데 프로젝트 %d개가 든 백업이 있다 (%s) — 확인한 뒤 복구하거나, "
+                                            "새로 시작하려면 백업을 다른 곳으로 옮긴다" % (backup["projects"], backup["path"]),
+                        backup=backup)
+        return {"projects": {}}
     except OSError as e:
         raise error("registry_unreadable", "레지스트리를 읽지 못했다 (%s): %s" % (REGISTRY, e))
     try:
@@ -601,6 +611,16 @@ def write_binding(sid, key, base):
         return False
 
 
+def drop_binding(sid):
+    """다른 프로젝트로 넘어가려다 바인딩을 쓰지 못했다. 남은 바인딩은 낡았으므로 지워 본다(못 지워도 계속한다)."""
+    p = binding_path(sid)
+    if p:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
 def binding_writable():
     """바인딩 저장소에 지금 쓸 수 있는가. 쓸 수 없으면 그 사이의 전환이 기록되지 않았을 수 있다."""
     d = BINDING_DIR
@@ -620,11 +640,20 @@ def push_target(projects, ctx, sid):
         bound = None
     folder, cands, by = folder_candidates(projects, ctx)
     writable = binding_writable()
+    # 세션 이름은 표시값이라 대상을 고르는 데는 쓰지 않는다. 다만 /handon이 붙인 이름이 다른 프로젝트를 가리키면
+    # 그 뒤의 전환이 바인딩에 기록되지 않았을 수 있다 — 그때는 정하지 않고 묻게 한다
+    named = None
+    for title in (ctx.get("pending_title"), ctx.get("title")):
+        if title:
+            named = lookup(title, projects)[0]
+            break
     target = None
     if not bound:
         note = "이 세션은 아직 어느 프로젝트에도 묶이지 않았다"
     elif not writable:
         note = "바인딩을 쓸 수 없는 상태라 묶인 프로젝트(%s)가 낡았을 수 있다" % bound
+    elif named and named != bound:
+        note = "묶인 프로젝트(%s)와 세션 이름이 가리키는 프로젝트(%s)가 다르다" % (bound, named)
     elif not folder:
         note = "묶인 프로젝트는 %s인데 실행 폴더(%s)로는 프로젝트를 정하지 못했다" % (bound, ctx["launch_cwd"])
     elif folder != bound:
@@ -895,6 +924,8 @@ def fixed_comparison(proj, latest):
         then = fixed_view(exact_text(old_doc), exact_text(old_plan), latest.get("plan_doc"))
     except Fail as f:
         return "unavailable", f.result.get("message"), None, None
+    except OSError as e:  # 사본이 있지만 읽을 수 없다(권한, 폴더로 바뀜)
+        return "unavailable", "체크포인트 %s의 사본을 읽지 못했다: %s" % (latest["id"], e), None, None
     changed = (sha256(doc_bytes), sha256(plan_bytes)) != (latest.get("doc_hash"), latest.get("plan_hash"))
     if now == then:
         return "same", None, None, changed
@@ -1125,6 +1156,8 @@ def cmd_pull(a):
     bound = write_binding(sid, key, base_of(latest))
     notices = history_notice(proj, cps)
     if sid and not bound:  # 문서는 읽었다. 그러나 다음 키 없는 저장이 이전 프로젝트로 갈 수 있다
+        if previous != key:
+            drop_binding(sid)
         notices.append("%s 문서는 읽었지만 이 세션을 %s에 묶지 못했다%s — 저장할 때는 키를 준다"
                        % (key, key, " (묶여 있던 프로젝트: %s)" % previous if previous and previous != key else ""))
     fixed_state, fixed_note, fixed_diff, doc_changed = fixed_comparison(proj, latest)

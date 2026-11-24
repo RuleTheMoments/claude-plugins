@@ -154,9 +154,12 @@ class ReviewTest(PushCase):
             with self.subTest(flags=flags):
                 self.ask(*flags)
                 self.assertEqual(self.checkpoint_ids("alpha"), ["C0001"])
-        p, d = self.push("alpha", "--approve-plan-change", sid=S1, cwd=self.w)  # 0.4 초안의 플래그
-        self.assertError(p, d, "approve_flag_removed")
-        self.assertEqual(self.checkpoint_ids("alpha"), ["C0001"])
+        good = self.ask()["review"]
+        for flags in (["--approve-plan-change"], ["--approve-plan-change", "--review", good]):  # 0.4 초안의 플래그
+            with self.subTest(flags=flags):
+                p, d = self.push("alpha", *flags, sid=S1, cwd=self.w)
+                self.assertError(p, d, "approve_flag_removed")
+                self.assertEqual(self.checkpoint_ids("alpha"), ["C0001"])
 
     def test_first_fixed_layer_cannot_be_saved_in_one_call(self):
         self.ask("--review", "0" * 16)
@@ -203,6 +206,17 @@ class ReviewTest(PushCase):
         d = self.ask()
         self.assertIn("PLAN.md", d["fixed_diff"])
         self.assertIn("PLAN2.md", d["fixed_diff"])
+        self.assertEqual(self.checkpoint_ids("alpha"), ["C0001"])
+
+    def test_plan_file_changed_after_the_diff_needs_a_new_review(self):
+        self.write_doc(self.w, "S1\nS2\n", "PLAN.md")
+        self.assertStatus(*self.jh("set", "alpha", "--plan-doc", "PLAN.md", sid=S1), "ok")
+        self.approve_first()
+        self.write_doc(self.w, "S1\nS2\nS3\n", "PLAN.md")
+        token = self.ask()["review"]
+        self.write_doc(self.w, "S1\nS9\n", "PLAN.md")  # 문서는 그대로, 계획 파일만 또 바뀌었다
+        d = self.ask("--review", token)
+        self.assertIn("S9", d["fixed_diff"])
         self.assertEqual(self.checkpoint_ids("alpha"), ["C0001"])
 
     def test_conflict_on_the_plan_file_alone_shows_a_diff(self):

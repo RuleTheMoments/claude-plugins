@@ -213,6 +213,43 @@ class PushTargetTest(BatonCase):
         os.chmod(pulls, 0o700)
 
 
+    def test_rebind_that_failed_only_for_a_moment_does_not_bring_the_old_target_back(self):
+        """바인딩 저장소가 잠깐만 막혔다가 풀렸다. 낡은 바인딩과 실행 폴더가 다시 일치해 보여도 대상을 정하지 않는다."""
+        wa = self.make_project("alpha")
+        self.register("alpha", wa)
+        self.register("beta", self.make_project("beta"))
+        self.make_transcript(S1, wa)
+        self.pull("alpha", sid=S1)
+        pulls = os.path.join(self.reg_dir, ".pulls")
+        os.chmod(pulls, 0o500)
+        self.assertFalse(self.pull("beta", sid=S1)["bound"])
+        self.assertStatus(*self.jh("title", "beta", sid=S1), "ok")  # handon 스킬이 세션 이름을 붙인다
+        os.chmod(pulls, 0o700)
+
+        cur = self.current(S1)
+        self.assertEqual((cur["bound"], cur["folder"], cur["binding_writable"]), ("alpha", "alpha", True))
+        self.assertIsNone(cur["push_target"])
+        self.assertIn("beta", cur["push_target_note"])
+
+    def test_session_named_after_the_bound_project_keeps_the_target(self):
+        wa = self.make_project("alpha")
+        self.register("alpha", wa)
+        self.make_transcript(S1, wa)
+        self.pull("alpha", sid=S1)
+        self.assertStatus(*self.jh("title", "alpha", sid=S1), "ok")
+        self.assertEqual(self.current(S1)["push_target"], "alpha")
+        self.assertStatus(*self.jh("title", "아무 이름", sid=S1), "ok")  # 등록된 프로젝트가 아닌 이름은 신호가 아니다
+        self.assertEqual(self.current(S1)["push_target"], "alpha")
+
+    def test_current_still_answers_when_the_registry_is_broken(self):
+        self.register("alpha", self.make_project("alpha"))
+        with open(self.registry, "w", encoding="utf-8") as f:
+            f.write("{")
+        cur = self.current(S1)
+        self.assertIsNone(cur["push_target"])
+        self.assertTrue(cur["push_target_note"])
+
+
 class PushByNameTest(BatonCase):
     """G2: 이름으로 push할 때도 엉뚱한 프로젝트에 쓰지 않는다."""
 

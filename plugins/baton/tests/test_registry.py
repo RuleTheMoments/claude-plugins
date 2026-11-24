@@ -190,6 +190,22 @@ class LoadRobustnessTest(BatonCase):
                 self.assertEqual(self.read_bytes(self.registry).decode("utf-8"), body, "손상된 본문을 덮어썼다")
                 self.assertEqual(self.read_bytes(self.registry + ".bak"), backup, "정상 백업을 바꿨다")
 
+    def test_missing_file_with_a_good_backup_does_not_start_over(self):
+        """본문만 사라졌다. 빈 레지스트리로 시작하면 두 번째 쓰기가 프로젝트가 든 백업을 덮는다."""
+        w = self.make_project("alpha")
+        self.register("alpha", w)
+        self.assertStatus(*self.jh("set", "alpha", "--one-line", "x", sid=S1), "ok")
+        backup = self.read_bytes(self.registry + ".bak")
+        os.remove(self.registry)
+        wb = self.make_project("beta")
+        for args in (["list"], ["register", "beta", "--workdir", wb]):
+            with self.subTest(args=args):
+                p, d = self.jh(*args, sid=S1)
+                self.assertError(p, d, "registry_missing")
+                self.assertEqual(d["backup"]["projects"], 1)
+        self.assertFalse(os.path.exists(self.registry))
+        self.assertEqual(self.read_bytes(self.registry + ".bak"), backup)
+
     def test_empty_projects_object_is_a_valid_registry(self):
         os.makedirs(self.reg_dir, exist_ok=True)
         with open(self.registry, "w", encoding="utf-8") as f:

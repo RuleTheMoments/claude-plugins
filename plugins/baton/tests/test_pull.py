@@ -119,25 +119,32 @@ class FixedStateTest(BatonCase):
             with open(copy, "ab") as f:
                 f.write(b"tampered\n")
 
+        def unreadable_copy():
+            os.chmod(copy, 0)
+
         def broken_markers():
             self.write_doc(self.w, good_doc.replace("<!-- /baton:fixed -->", ""))
 
         def missing_plan():
             os.remove(os.path.join(self.w, "PLAN.md"))
 
-        for name, breaker in (("copy", broken_copy), ("markers", broken_markers), ("plan", missing_plan)):
+        for name, breaker in (("copy", broken_copy), ("unreadable", unreadable_copy), ("markers", broken_markers),
+                              ("plan", missing_plan)):
             with self.subTest(case=name):
-                breaker()
                 before = self.snapshot(self.work)
-                d = self.pull("alpha", sid=S2, cwd=self.w)  # 읽기는 실패하지 않는다
-                self.assertEqual(d["fixed_state"], "unavailable")
-                self.assertTrue(d["fixed_note"])
-                self.assertFalse(d.get("fixed_diff"))
-                self.assertEqual(self.snapshot(self.work), before)
-                with open(copy, "wb") as f:  # 다음 경우를 위해 되돌린다
-                    f.write(good_copy)
-                self.write_doc(self.w, good_doc)
-                self.write_doc(self.w, "S1\n", "PLAN.md")
+                breaker()
+                try:
+                    d = self.pull("alpha", sid=S2, cwd=self.w)  # 읽기는 실패하지 않는다
+                    self.assertEqual(d["fixed_state"], "unavailable")
+                    self.assertTrue(d["fixed_note"])
+                    self.assertFalse(d.get("fixed_diff"))
+                finally:  # 다음 경우를 위해 되돌린다
+                    os.chmod(copy, 0o600)
+                    with open(copy, "wb") as f:
+                        f.write(good_copy)
+                    self.write_doc(self.w, good_doc)
+                    self.write_doc(self.w, "S1\n", "PLAN.md")
+                self.assertEqual(self.snapshot(self.work), before, "pull이 작업 폴더에 무언가 남겼다")
 
     def test_wiped_history_is_no_base_with_a_notice(self):
         self.saved()
