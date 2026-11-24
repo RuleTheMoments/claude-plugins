@@ -94,6 +94,7 @@ class FixedStateTest(BatonCase):
         d = self.pull("alpha", sid=S2, cwd=self.w)
         self.assertEqual(d["fixed_state"], "same")
         self.assertTrue(d["doc_changed"])
+        self.assertEqual(d["doc_bytes"], len(self.read_bytes(os.path.join(self.w, "docs", "HANDOFF.md"))))
         self.assertFalse(d.get("fixed_diff"))
         self.assertEqual(d["notices"], [])
 

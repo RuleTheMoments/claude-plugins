@@ -1139,6 +1139,7 @@ def cmd_pull(a):
         "status": "ok", "key": key, "by": by,
         "workdir": proj.workdir, "handoff_doc": proj.doc, "plan_doc": proj.plan,
         "doc_exists": os.path.isfile(proj.doc),
+        "doc_bytes": os.path.getsize(proj.doc) if os.path.isfile(proj.doc) else None,
         "latest": latest["id"] if latest else None,
         "latest_at": latest.get("at") if latest else None,
         "latest_branch": latest.get("branch") if latest else None,
@@ -1252,6 +1253,7 @@ def cmd_push(a):
             result = {"status": "ok", "key": key, "checkpoint": new_meta["id"], "parent": latest_id,
                       "plan_changed": plan_changed}
         result["notices"] = notices
+        result["doc_bytes"] = len(doc_bytes)
 
         cid = result["checkpoint"]
         entry = proj.entry

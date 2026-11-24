@@ -2,7 +2,7 @@
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "baton",
   "version": "0.4.0",
-  "description": "프로젝트별 세션 핸드오프: /handon(읽기 전용 이어받기), /handoff(체크포인트 저장 — 목표·결정·계획 변경은 승인), /handlist(목록)",
+  "description": "프로젝트별 세션 핸드오프: /handon(읽기 전용 이어받기 — 마지막 체크포인트와 달라진 목표·결정·계획을 보여 준다), /handoff(체크포인트 저장 — 목표·결정·계획이 바뀌면 diff를 먼저 보여 준다), /handlist(목록)",
   "author": {
     "name": "Arena",
     "url": "https://github.com/RuleTheMoments"
