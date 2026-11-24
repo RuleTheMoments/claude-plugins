@@ -283,7 +283,9 @@ def registry_lock():
 # ---------- 레지스트리 ----------
 
 def registry_shape_ok(data):
-    return isinstance(data, dict) and isinstance(data.get("projects", {}), dict)
+    """파일이 있으면 projects 객체가 있어야 한다. 키가 빠진 {}를 빈 레지스트리로 받아들이면
+    다음 쓰기가 마지막 정상 백업을 그 {}로 바꾼다."""
+    return isinstance(data, dict) and isinstance(data.get("projects"), dict)
 
 
 def backup_info():
@@ -316,7 +318,6 @@ def load_registry():
         backup = backup_info()
         hint = (" — %s 은 읽을 수 있다. 사용자에게 확인한 뒤 복구한다" % backup["path"]) if backup and backup["valid"] else ""
         raise error("registry_invalid", "레지스트리가 깨졌다 (%s): %s%s" % (REGISTRY, why, hint), backup=backup)
-    data.setdefault("projects", {})
     return data
 
 

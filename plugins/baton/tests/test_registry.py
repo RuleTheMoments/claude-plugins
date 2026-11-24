@@ -170,6 +170,36 @@ class LoadRobustnessTest(BatonCase):
         self.assertError(p, d, "registry_invalid")
         self.assertTrue(d["backup"]["valid"], d)
 
+    def test_existing_file_without_projects_is_an_error_and_backup_survives(self):
+        """본문이 {}인데 빈 레지스트리로 받아들이면, 다음 쓰기가 마지막 정상 백업을 {}로 바꾼다."""
+        w = self.make_project("alpha")
+        self.register("alpha", w)
+        self.assertStatus(*self.jh("set", "alpha", "--one-line", "x", sid=S1), "ok")  # 두 번째 쓰기 → 유효한 .bak
+        backup = self.read_bytes(self.registry + ".bak")
+        self.assertIn(b"alpha", backup)
+        wb = self.make_project("beta")
+        for body in ("{}\n", "[]\n", '{"projects": []}\n'):
+            with self.subTest(body=body):
+                with open(self.registry, "w", encoding="utf-8") as f:
+                    f.write(body)
+                p, d = self.jh("list", sid=S1)
+                self.assertError(p, d, "registry_invalid")
+                self.assertTrue(d["backup"]["valid"], d)
+                p, d = self.jh("register", "beta", "--workdir", wb)
+                self.assertError(p, d, "registry_invalid")
+                self.assertEqual(self.read_bytes(self.registry).decode("utf-8"), body, "손상된 본문을 덮어썼다")
+                self.assertEqual(self.read_bytes(self.registry + ".bak"), backup, "정상 백업을 바꿨다")
+
+    def test_empty_projects_object_is_a_valid_registry(self):
+        os.makedirs(self.reg_dir, exist_ok=True)
+        with open(self.registry, "w", encoding="utf-8") as f:
+            f.write('{"projects": {}}\n')
+        p, d = self.jh("list", sid=S1)
+        self.assertStatus(p, d, "ok")
+        self.assertEqual(d["projects"], [])
+        self.register("alpha", self.make_project("alpha"))
+        self.assertEqual([s["key"] for s in self.jh("list", sid=S1)[1]["projects"]], ["alpha"])
+
     def test_one_bad_entry_does_not_break_others(self):
         wa = self.make_project("alpha")
         wd = self.make_project("delta")
