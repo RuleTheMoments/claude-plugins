@@ -1162,8 +1162,8 @@ def cmd_pull(a):
                        % (key, key, " (묶여 있던 프로젝트: %s)" % previous if previous and previous != key else ""))
     fixed_state, fixed_note, fixed_diff, doc_changed = fixed_comparison(proj, latest)
     if fixed_state == "differs":
-        notices.append("작업 문서의 고정층(목표·하지 않을 것·결정·계획)이 %s와 다르다 — 체크포인트에 없는 변경이고, "
-                       "어느 쪽이 맞는지는 정해지지 않았다" % latest["id"])
+        notices.append("작업 문서의 고정층(목표·하지 않을 것·결정·계획)이 체크포인트 %s 때와 다르다 — 체크포인트에 없는 "
+                       "변경이고, 어느 쪽이 맞는지는 정해지지 않았다" % latest["id"])
     elif fixed_state == "unavailable":
         notices.append("고정층을 마지막 체크포인트와 견주지 못했다 — %s" % fixed_note)
     entry = proj.entry
