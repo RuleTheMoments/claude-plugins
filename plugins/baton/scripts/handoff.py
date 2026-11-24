@@ -600,6 +600,41 @@ def write_binding(sid, key, base):
         return False
 
 
+def binding_writable():
+    """바인딩 저장소에 지금 쓸 수 있는가. 쓸 수 없으면 그 사이의 전환이 기록되지 않았을 수 있다."""
+    d = BINDING_DIR
+    while not os.path.isdir(d):  # 아직 없으면 만들 수 있는지를 본다
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
+    return os.access(d, os.W_OK | os.X_OK)
+
+
+def push_target(projects, ctx, sid):
+    """키 없는 /handoff가 쓸 곳. 바인딩은 후보일 뿐이다 — 이 세션의 바인딩과 실행 폴더의 프로젝트가
+    같은 키일 때만 정해 준다. 어긋나거나 한쪽이 없으면 정하지 않고, 스킬이 문서를 고치기 전에 묻는다."""
+    bound = read_binding(sid).get("current") if sid else None
+    if bound not in projects:
+        bound = None
+    folder, cands, by = folder_candidates(projects, ctx)
+    writable = binding_writable()
+    target = None
+    if not bound:
+        note = "이 세션은 아직 어느 프로젝트에도 묶이지 않았다"
+    elif not writable:
+        note = "바인딩을 쓸 수 없는 상태라 묶인 프로젝트(%s)가 낡았을 수 있다" % bound
+    elif not folder:
+        note = "묶인 프로젝트는 %s인데 실행 폴더(%s)로는 프로젝트를 정하지 못했다" % (bound, ctx["launch_cwd"])
+    elif folder != bound:
+        note = "묶인 프로젝트(%s)와 실행 폴더의 프로젝트(%s)가 다르다" % (bound, folder)
+    else:
+        target, note = bound, "묶인 프로젝트와 실행 폴더의 프로젝트가 같다"
+    return {"bound": bound, "folder": folder, "folder_by": by if folder else None,
+            "candidates": ([bound] if bound else []) + [c for c in cands if c != bound],
+            "binding_writable": writable, "push_target": target, "push_target_note": note}
+
+
 # ---------- 체크포인트 ----------
 
 def sha256(data):
@@ -1048,7 +1083,12 @@ def cmd_pull(a):
     cps = load_index(proj)
     latest = cps[-1] if cps else None
     branch, head = git_info(proj.workdir)
+    previous = read_binding(sid).get("current") if sid else None
     bound = write_binding(sid, key, base_of(latest))
+    notices = history_notice(proj, cps)
+    if sid and not bound:  # 문서는 읽었다. 그러나 다음 키 없는 저장이 이전 프로젝트로 갈 수 있다
+        notices.append("%s 문서는 읽었지만 이 세션을 %s에 묶지 못했다%s — 저장할 때는 키를 준다"
+                       % (key, key, " (묶여 있던 프로젝트: %s)" % previous if previous and previous != key else ""))
     entry = proj.entry
     status = project_status(key, entry, ctx)
     result = {
@@ -1068,7 +1108,7 @@ def cmd_pull(a):
         "resumable": status["resumable"],
         "bound": bound,
         "issues": status["issues"],
-        "notices": history_notice(proj, cps),
+        "notices": notices,
     }
     head_note = ""
     if latest and latest.get("head") and head and latest["head"] != head:
@@ -1087,14 +1127,12 @@ def cmd_push(a):
         reg = load_registry()
         projects = reg["projects"]
         binding = read_binding(sid)
-        if name:
-            key = project_by_name(name, projects)
-        else:
-            key = binding.get("current")
-            if key not in projects:
-                _, cands, _ = folder_candidates(projects, ctx)
-                raise Fail("needs_target", "이 세션은 아직 어느 프로젝트에도 묶이지 않았다 — 키를 주거나 새로 등록한다",
-                           candidates=cands)
+        if not name:
+            # 바인딩은 후보일 뿐이다. 대상은 문서를 고치기 전에 정해야 하므로(current) 여기서는 고르지 않는다
+            t = push_target(projects, ctx, sid)
+            raise Fail("needs_target", "키 없이는 쓰지 않는다 — 대상을 정해 키를 준다 (%s)" % t["push_target_note"],
+                       candidates=t["candidates"], bound=t["bound"], folder=t["folder"])
+        key = project_by_name(name, projects)
         proj = get_project(reg, key)
         doc_bytes = read_bytes(proj.doc)
         if doc_bytes is None:
@@ -1172,7 +1210,11 @@ def cmd_push(a):
                 write_registry(reg)
             except OSError as e:
                 write_error = str(e)
-        write_binding(sid, key, base_of(new_meta or latest))
+        bound = write_binding(sid, key, base_of(new_meta or latest))
+        result["bound"] = bound
+        if sid and not bound:  # 사본은 이미 저장됐다
+            notices.append("%s는 저장됐다. 이 세션을 %s에 묶지 못했다 — 다시 저장할 필요는 없고, 다음에도 키를 준다"
+                           % (cid, key))
 
     if write_error:
         raise Fail("partial", "%s 저장됨 / 색인은 %s / 같은 명령을 다시 실행하면 색인만 고친다 (%s)"
@@ -1270,6 +1312,13 @@ def cmd_current(a):
     r["status"] = "ok"
     sid = ctx["session_id"] if valid_sid(ctx["session_id"]) else None
     r["bound"] = read_binding(sid).get("current") if sid else None
+    try:
+        t = push_target(load_registry()["projects"], ctx, sid)
+    except Fail as f:  # 레지스트리가 깨져도 세션 정보는 보여 준다
+        t = {"folder": None, "folder_by": None, "candidates": [], "binding_writable": binding_writable(),
+             "push_target": None, "push_target_note": f.result.get("message")}
+    t.pop("bound", None)  # bound는 기록된 그대로 보여 준다(지워진 프로젝트여도)
+    r.update(t)
     return r
 
 
@@ -1279,6 +1328,7 @@ def print_current(r):
     print("실행 폴더  %s" % r["launch_cwd"])
     print("트랜스크립트 폴더  %s" % r["project_dir"])
     print("묶인 프로젝트  %s" % (r.get("bound") or "없음 — pull 또는 push 하면 묶인다"))
+    print("키 없는 저장  %s" % (r["push_target"] or "대상을 묻는다 — %s" % r.get("push_target_note")))
 
 
 def cmd_title(a):

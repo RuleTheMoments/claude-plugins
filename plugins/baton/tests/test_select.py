@@ -73,7 +73,13 @@ class LaunchFolderTest(BatonCase):
 
 
 class PushTargetTest(BatonCase):
-    """결정 2: 키가 비면 이 세션의 바인딩으로, 없으면 쓰지 않고 묻는다."""
+    """쓰기 대상. 헬퍼의 push는 키를 받아야만 쓴다. 키 없는 /handoff의 대상은 current가 정해 준다 —
+    이 세션의 바인딩과 실행 폴더의 프로젝트가 같은 키일 때만. 어긋나면 정해 주지 않고, 스킬이 묻는다."""
+
+    def current(self, session, cwd=None):
+        p, d = self.jh("current", sid=session, cwd=cwd)
+        self.assertStatus(p, d, "ok")
+        return d
 
     def test_no_key_without_binding_asks_and_writes_nothing(self):
         w = self.make_project("alpha")
@@ -93,62 +99,78 @@ class PushTargetTest(BatonCase):
         self.assertStatus(p, d, "needs_target")
         self.assertEqual(d["candidates"], [])
 
-    def test_no_key_follows_pull_binding_not_folder_guess(self):
+    def test_no_key_never_writes_even_when_bound(self):
+        """바인딩은 후보일 뿐이다. 헬퍼는 키 없이 쓰지 않는다."""
         wa, wb = make_h2a(self)
-        alpha_before = self.snapshot(wa)
         self.pull("beta", sid=S1, cwd=wb)
         self.write_doc(wb, make_doc(status="- beta 작업"))
+        before = self.snapshot(self.work)
         p, d = self.push(sid=S1, cwd=wb)
+        self.assertStatus(p, d, "needs_target")
+        self.assertEqual(d["bound"], "beta")
+        self.assertEqual(self.snapshot(self.work), before)
+
+        p, d = self.push("beta", sid=S1, cwd=wb)
         self.assertStatus(p, d, "ok")
-        self.assertEqual(d["key"], "beta")
-        self.assertEqual(d["checkpoint"], "C0001")
+        self.assertEqual((d["key"], d["checkpoint"]), ("beta", "C0001"))
         self.assertEqual(self.checkpoint_ids("alpha"), [])
-        self.assertEqual(self.snapshot(wa), alpha_before)
 
-    def test_no_key_follows_previous_push(self):
-        w = self.make_project("alpha")
-        self.register("alpha", w)
-        self.assertStatus(*self.push("alpha", sid=S1, cwd=w), "ok")
-        self.write_doc(w, make_doc(status="- 두 번째"))
-        p, d = self.push(sid=S1, cwd=w)
-        self.assertStatus(p, d, "ok")
-        self.assertEqual((d["key"], d["checkpoint"]), ("alpha", "C0002"))
+    def test_target_is_named_only_when_binding_and_folder_agree(self):
+        wa = self.make_project("alpha")
+        self.register("alpha", wa)
+        self.register("beta", self.make_project("beta"))
+        self.make_transcript(S1, wa)  # S1은 alpha 폴더에서 띄운 세션
+        d = self.current(S1)
+        self.assertEqual((d["bound"], d["folder"], d["push_target"]), (None, "alpha", None))  # 아직 묶이지 않았다
+        self.pull("alpha", sid=S1)
+        d = self.current(S1)
+        self.assertEqual((d["bound"], d["folder"], d["push_target"]), ("alpha", "alpha", "alpha"))
+        self.pull("beta", sid=S1)  # 다른 프로젝트를 읽었다 — 실행 폴더와 어긋난다
+        d = self.current(S1)
+        self.assertEqual((d["bound"], d["folder"], d["push_target"]), ("beta", "alpha", None))
+        self.assertIn("alpha", d["push_target_note"])
+        self.assertIn("beta", d["push_target_note"])
 
-    def test_most_recent_explicit_command_rebinds(self):
+    def test_folder_outside_every_workdir_backs_a_target_only_after_a_save_from_there(self):
+        """상위 폴더에서 띄운 세션. 그 폴더에서 저장한 적이 있는 프로젝트가 하나뿐이면 폴더도 그 프로젝트를 가리킨다."""
+        wa = self.make_project("alpha")
+        self.register("alpha", wa)
+        self.make_transcript(S2, self.work)
+        self.pull("alpha", sid=S2)
+        d = self.current(S2)
+        self.assertEqual((d["bound"], d["folder"], d["push_target"]), ("alpha", None, None))
+        self.write_doc(wa, make_doc(status="- 첫 저장"))
+        self.assertStatus(*self.push("alpha", sid=S2), "ok")  # 키를 밝힌 저장
+        d = self.current(S2)
+        self.assertEqual((d["bound"], d["folder"], d["push_target"]), ("alpha", "alpha", "alpha"))
+
+    def test_most_recent_pull_rebinds(self):
         self.register("alpha", self.make_project("alpha"))
-        wb = self.make_project("beta")
-        self.register("beta", wb)
+        self.register("beta", self.make_project("beta"))
         self.pull("alpha", sid=S1)
         self.pull("beta", sid=S1)
-        self.write_doc(wb, make_doc(status="- beta"))
-        p, d = self.push(sid=S1)
-        self.assertStatus(p, d, "ok")
-        self.assertEqual(d["key"], "beta")
+        self.assertEqual(self.current(S1)["bound"], "beta")
 
     def test_pull_chosen_by_folder_also_binds(self):
-        """/handon 다음 /handoff를 둘 다 키 없이 쓰면, pull이 고른 프로젝트에 쓴다."""
+        """/handon 다음 /handoff를 둘 다 키 없이 쓰면, pull이 고른 프로젝트가 대상이다."""
         wa, wb = make_h2a(self)
         self.assertEqual(self.pull(sid=S1, cwd=wb)["key"], "beta")
-        self.write_doc(wb, make_doc(status="- beta 작업"))
-        p, d = self.push(sid=S1, cwd=wb)
-        self.assertStatus(p, d, "ok")
-        self.assertEqual(d["key"], "beta")
+        d = self.current(S1, cwd=wb)
+        self.assertEqual((d["bound"], d["push_target"]), ("beta", "beta"))
 
     def test_current_shows_the_binding_without_changing_it(self):
         w = self.make_project("alpha")
         self.register("alpha", w)
-        p, d = self.jh("current", sid=S1)
-        self.assertStatus(p, d, "ok")
-        self.assertIsNone(d["bound"])
+        self.assertIsNone(self.current(S1)["bound"])
         self.pull("alpha", sid=S1)
-        self.assertEqual(self.jh("current", sid=S1)[1]["bound"], "alpha")
-        self.assertIsNone(self.jh("current", sid=S2)[1]["bound"])
+        self.assertEqual(self.current(S1)["bound"], "alpha")
+        self.assertIsNone(self.current(S2)["bound"])
         # current는 기준을 바꾸지 않는다 — 그 사이 다른 세션의 push는 여전히 충돌로 잡힌다
         self.write_doc(w, make_doc(status="- S2"))
         self.assertStatus(*self.push("alpha", sid=S2), "ok")
-        self.jh("current", sid=S1)
+        self.current(S1)
         self.write_doc(w, make_doc(status="- S1"))
-        self.assertStatus(*self.push(sid=S1), "conflict")
+        self.assertStatus(*self.push("alpha", sid=S1), "conflict")
 
     def test_binding_belongs_to_one_session(self):
         w = self.make_project("alpha")
@@ -158,6 +180,37 @@ class PushTargetTest(BatonCase):
         p, d = self.push(sid=S2, cwd=self.work)
         self.assertStatus(p, d, "needs_target")
         self.assertEqual(self.checkpoint_ids("alpha"), [])
+
+    def test_failed_rebind_is_reported_and_never_redirects_a_write(self):
+        """alpha에 묶인 세션이 beta를 읽었는데 바인딩을 쓰지 못했다. 키 없는 저장이 alpha로 가면 안 된다."""
+        wa = self.make_project("alpha")
+        wb = self.make_project("beta")
+        self.register("alpha", wa)
+        self.register("beta", wb)
+        self.make_transcript(S1, wa)
+        self.pull("alpha", sid=S1)
+        pulls = os.path.join(self.reg_dir, ".pulls")
+        os.chmod(pulls, 0o500)
+        d = self.pull("beta", sid=S1)  # 문서는 읽힌다
+        self.assertFalse(d["bound"])
+        self.assertTrue(any("묶지 못했다" in n for n in d["notices"]), d["notices"])
+
+        cur = self.current(S1)
+        self.assertEqual(cur["bound"], "alpha")  # 낡은 바인딩이 남아 있다
+        self.assertFalse(cur["binding_writable"])
+        self.assertIsNone(cur["push_target"])    # 그래서 대상을 정해 주지 않는다
+        self.write_doc(wb, make_doc(status="- beta 작업"))
+        before = self.snapshot(self.work)
+        self.assertStatus(*self.push(sid=S1, cwd=wa), "needs_target")
+        self.assertEqual(self.snapshot(self.work), before)
+
+        p, d = self.push("beta", sid=S1, cwd=wa)  # 키를 밝히면 그 프로젝트에만 쓴다
+        self.assertStatus(p, d, "ok")             # 사본은 저장됐다 — 다시 저장하라고 하지 않는다
+        self.assertEqual(d["checkpoint"], "C0001")
+        self.assertFalse(d["bound"])
+        self.assertTrue(any("묶지 못했다" in n for n in d["notices"]), d["notices"])
+        self.assertEqual(self.checkpoint_ids("alpha"), [])
+        os.chmod(pulls, 0o700)
 
 
 class PushByNameTest(BatonCase):
