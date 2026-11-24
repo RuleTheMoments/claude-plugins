@@ -4,18 +4,19 @@
   register KEY --workdir DIR [...]        새 프로젝트를 레지스트리에 등록한다
   set      KEY [--one-line T ...]          레지스트리 엔트리의 요약 필드를 고친다
   pull     [KEY]                           이어받을 프로젝트를 정하고 읽은 체크포인트를 이 세션에 기록한다.
-                                           프로젝트 명령은 실행하지 않는다
-  push     [KEY] [--approve-plan-change]   핸드오프 문서의 체크포인트를 남기고 레지스트리를 갱신한다
+                                           작업 문서의 고정층을 그 체크포인트와 견줘 알린다. 프로젝트 명령은 실행하지 않는다
+  push     KEY [--review VALUE]            핸드오프 문서의 체크포인트를 남기고 레지스트리를 갱신한다.
+                                           고정층이 바뀌었으면 diff와 검토값을 돌려주고, 그 값을 받아야 저장한다
   log      KEY                             체크포인트 목록
   show     KEY ID [--against ID2]          그 체크포인트의 문서, 또는 두 체크포인트의 diff
   list     [--json]                        등록된 프로젝트를 Claude 실행 폴더 기준으로 나눠 보여준다
   resolve  [NAME]                          이름(생략하면 실행 폴더)으로 프로젝트 하나를 고른다 — JSON
-  current  [--json]                        현재 세션 ID·이름·실행 폴더·트랜스크립트 폴더
+  current  [--json]                        현재 세션 ID·이름·실행 폴더·트랜스크립트 폴더, 키 없는 저장의 대상
   title    NAME                            현재 세션 이름을 NAME으로 — 다음 입력 때 훅이 적용한다
   hook                                     UserPromptSubmit 훅(stdin JSON). /handon <이름>이면 세션 이름을 붙인다
 
 공통 옵션: --session-id ID (기본 $CLAUDE_CODE_SESSION_ID), --cwd DIR (기본 현재 디렉터리), --json
---json 결과의 status가 ok·unchanged·repaired면 종료 코드 0, 그 밖(error·needs_target·needs_approval·
+--json 결과의 status가 ok·unchanged·repaired면 종료 코드 0, 그 밖(error·needs_target·needs_review·
 conflict·partial)은 1이다.
 
 "실행 폴더"는 claude를 띄운 폴더다. 세션 트랜스크립트는 ~/.claude/projects/<실행 폴더를 -로 바꾼 이름>/ 에 쌓인다.
@@ -805,6 +806,16 @@ def fixed_view(doc_text, plan_text, plan_rel):
     return "\n\n".join(parts) + ("\n" if parts else "")
 
 
+def review_value(key, parent, fixed_now):
+    """보여 준 변경과 저장하려는 내용이 같은지 확인하는 값. 프로젝트, 부모 체크포인트, 후보 고정층(계획 파일의
+    경로와 내용 포함)에 묶인다. 사람이 diff를 봤다는 증명이 아니다 — 그 사이 내용이 바뀌지 않았는지 볼 뿐이다."""
+    h = hashlib.sha256()
+    for part in (key, parent["id"] if parent else "", (parent.get("doc_hash") or "") if parent else "", fixed_now):
+        h.update(part.encode("utf-8", "surrogateescape"))
+        h.update(b"\0")
+    return h.hexdigest()[:16]
+
+
 def udiff(a, b, a_name, b_name):
     a, b = shown(a) or "", shown(b) or ""
     a = a if (not a or a.endswith("\n")) else a + "\n"
@@ -1157,6 +1168,9 @@ def cmd_push(a):
     ctx = current_context(a.session_id, a.cwd, want_title=False)
     sid = ctx["session_id"] if valid_sid(ctx["session_id"]) else None
     name = " ".join(a.name).strip()
+    if a.approve_plan_change:
+        raise error("approve_flag_removed", "--approve-plan-change는 없어졌다 — push가 돌려주는 검토값을 "
+                                            "--review <값>으로 준다")
     with registry_lock():
         reg = load_registry()
         projects = reg["projects"]
@@ -1185,7 +1199,10 @@ def cmd_push(a):
         latest = cps[-1] if cps else None
         latest_id = latest["id"] if latest else None
         new_meta = None
-        if latest and latest.get("doc_hash") == doc_hash and latest.get("plan_hash") == plan_hash:
+        plan_rel_now = proj.plan_rel if plan_bytes is not None else None
+        # 계획 파일의 경로도 본다 — 내용이 같은 다른 파일로 바꿔 놓은 것은 "바뀐 것 없음"이 아니다
+        if latest and (latest.get("doc_hash"), latest.get("plan_hash"), latest.get("plan_doc")) \
+                == (doc_hash, plan_hash, plan_rel_now):
             checkpoint_bytes(proj, latest)  # 사본이 온전한지 확인한다
             result = {"status": "unchanged", "key": key, "checkpoint": latest_id,
                       "parent": latest.get("parent"), "plan_changed": False}
@@ -1194,31 +1211,41 @@ def cmd_push(a):
             mine = bool(sid and latest and latest.get("session_id") == sid)
             if base is not None and (base.get("id"), base.get("hash")) != (latest_id, latest and latest.get("doc_hash")) \
                     and not mine:
-                latest_text = exact_text(checkpoint_bytes(proj, latest)[0]) if latest else ""
+                their_doc, their_plan = checkpoint_bytes(proj, latest) if latest else (b"", None)
                 if latest:
                     why = "이 세션이 읽은 뒤(%s) 다른 세션이 %s를 저장했다" % (base.get("id") or "체크포인트 없음", latest_id)
                 else:
                     why = "이 세션이 읽은 뒤(%s) 체크포인트 이력이 사라졌다" % (base.get("id") or "체크포인트 없음")
-                raise Fail("conflict", why + " — diff를 보고 합친 뒤 pull하고 다시 push한다",
-                           key=key, base=base.get("id"), latest=latest_id, notices=notices,
-                           diff=udiff(latest_text, doc_text, latest_id or "(없음)", "현재 문서"))
+                diff = udiff(exact_text(their_doc), doc_text, latest_id or "(없음)", "현재 문서")
+                if their_plan is not None or plan_text is not None:
+                    diff += udiff(exact_text(their_plan) or "", plan_text or "",
+                                  (latest_id or "(없음)") + " 계획", "현재 계획")
+                raise Fail("conflict", why + " — 저장하지 않았다. diff를 사용자에게 보여 주고 어떻게 합칠지 정한다. "
+                                             "합친 뒤에만 pull로 기준을 맞추고 다시 push한다",
+                           key=key, base=base.get("id"), latest=latest_id, notices=notices, diff=diff)
             if latest:
                 old_doc, old_plan = checkpoint_bytes(proj, latest)
                 parent_fixed = fixed_view(exact_text(old_doc), exact_text(old_plan), latest.get("plan_doc"))
             else:
                 parent_fixed = ""
             plan_changed = fixed_now != parent_fixed
-            if plan_changed and not a.approve_plan_change:
-                raise Fail("needs_approval",
-                           "고정층(목표·하지 않을 것·결정·계획)이 바뀌었다 — 사용자 승인 뒤 --approve-plan-change로 다시 실행한다",
-                           key=key, parent=latest_id, notices=notices,
-                           fixed_diff=udiff(parent_fixed, fixed_now, (latest_id or "(없음)") + " 고정층", "현재 고정층"))
+            if plan_changed:
+                expected, given = review_value(key, latest, fixed_now), (a.review or "").strip()
+                if given != expected:
+                    if given:
+                        lead = "검토값이 지금 내용과 맞지 않는다 — 보여 준 뒤에 문서나 기준 체크포인트가 바뀌었다. 저장하지 않았다"
+                    else:
+                        lead = "고정층(목표·하지 않을 것·결정·계획)이 바뀌었다. 저장하지 않았다"
+                    raise Fail("needs_review", lead + " — 아래 diff를 사용자에게 보여 주고, 저장하기로 하면 "
+                                                      "--review %s 로 다시 실행한다" % expected,
+                               key=key, parent=latest_id, notices=notices, review=expected, stale_review=bool(given),
+                               fixed_diff=udiff(parent_fixed, fixed_now, (latest_id or "(없음)") + " 고정층", "현재 고정층"))
             branch, head = git_info(proj.workdir)
             transcript_dir = ctx["project_dir"] if ctx["transcript"] else None
             new_meta = write_checkpoint(proj, cps, {
                 "parent": latest_id, "at": now_iso(), "session_id": sid, "transcript_dir": transcript_dir,
                 "branch": branch, "head": head, "doc": proj.doc_rel, "doc_hash": doc_hash,
-                "plan_doc": proj.plan_rel if plan_bytes is not None else None, "plan_hash": plan_hash,
+                "plan_doc": plan_rel_now, "plan_hash": plan_hash,
                 "fixed_hash": sha256(fixed_now.encode("utf-8", "surrogateescape")),
                 "plan_changed": plan_changed,
             }, doc_bytes, plan_bytes)
@@ -1260,7 +1287,7 @@ def cmd_push(a):
     result["message"] = "%s: %s %s%s%s%s" % (
         key, cid, words[result["status"]],
         " (부모 %s)" % result["parent"] if result["status"] == "ok" and result["parent"] else "",
-        " · 고정층 변경 승인됨" if result.get("plan_changed") else "",
+        " · 고정층 변경 포함" if result.get("plan_changed") else "",
         "".join("\n⚠ " + n for n in notices))
     return result
 
@@ -1492,7 +1519,8 @@ def build_parser():
     sp.add_argument("name", nargs="*")
     sp = sub.add_parser("push", parents=[common])
     sp.add_argument("name", nargs="*")
-    sp.add_argument("--approve-plan-change", action="store_true")
+    sp.add_argument("--review", metavar="VALUE")
+    sp.add_argument("--approve-plan-change", action="store_true", help=argparse.SUPPRESS)
     sp = sub.add_parser("log", parents=[common])
     sp.add_argument("key")
     sp = sub.add_parser("show", parents=[common])

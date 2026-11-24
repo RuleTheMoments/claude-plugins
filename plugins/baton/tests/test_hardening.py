@@ -33,13 +33,13 @@ class SharedWorkdirTest(HardeningCase):
         self.register("api", w, "--doc", "docs/api.md")
         self.register("web", w, "--doc", "docs/web.md")
         for key in ("api", "web"):
-            self.assertStatus(*self.push(key, "--approve-plan-change", sid=S1, cwd=w), "ok")
+            self.assertStatus(*self.save(key, sid=S1, cwd=w), "ok")
         self.assertEqual(self.checkpoint_ids("api"), ["C0001"])
         self.assertEqual(self.checkpoint_ids("web"), ["C0001"])
 
         self.write_doc(w, make_doc(FIXED.replace(NON_GOAL + "\n", "")), "docs/api.md")
         p, d = self.push("api", sid=S1, cwd=w)
-        self.assertStatus(p, d, "needs_approval")
+        self.assertStatus(p, d, "needs_review")
         self.assertIn(NON_GOAL, d["fixed_diff"])
         self.assertEqual(self.checkpoint_ids("web"), ["C0001"])
 
@@ -49,7 +49,7 @@ class StoredCopyTest(HardeningCase):
         super().setUp()
         self.w = self.make_project("alpha", make_doc(FIXED))
         self.register("alpha", self.w)
-        self.assertStatus(*self.push("alpha", "--approve-plan-change", sid=S1, cwd=self.w), "ok")
+        self.assertStatus(*self.save("alpha", sid=S1, cwd=self.w), "ok")
 
     def test_tampered_copy_cannot_launder_a_fixed_change(self):
         dropped = make_doc(FIXED.replace(NON_GOAL + "\n", ""))
@@ -89,25 +89,25 @@ class StoredCopyTest(HardeningCase):
 
 
 class EncodingTest(HardeningCase):
-    def test_non_utf8_change_in_fixed_layer_needs_approval(self):
+    def test_non_utf8_change_in_fixed_layer_needs_review(self):
         w = self.mkdir("work", "legacy")
         path = os.path.join(w, DOC_REL)
         os.makedirs(os.path.dirname(path))
         with open(path, "wb") as f:  # 0xA3, 0xA5는 UTF-8로 읽을 수 없는 바이트다
             f.write(b"# h\n" + FIXED_START.encode() + b"\n- price \xa3\n" + FIXED_END.encode() + b"\n")
         self.register("legacy", w)
-        self.assertStatus(*self.push("legacy", "--approve-plan-change", sid=S1, cwd=w), "ok")
+        self.assertStatus(*self.save("legacy", sid=S1, cwd=w), "ok")
         with open(path, "wb") as f:
             f.write(b"# h\n" + FIXED_START.encode() + b"\n- price \xa5\n" + FIXED_END.encode() + b"\n")
         p, d = self.push("legacy", sid=S1, cwd=w)
-        self.assertStatus(p, d, "needs_approval")
+        self.assertStatus(p, d, "needs_review")
 
 
 class WipedHistoryTest(HardeningCase):
     def test_wiped_baton_folder_never_reuses_ids_or_hides_the_other_push(self):
         w = self.make_project("alpha", make_doc(FIXED))
         self.register("alpha", w)
-        self.assertStatus(*self.push("alpha", "--approve-plan-change", sid=S1, cwd=w), "ok")
+        self.assertStatus(*self.save("alpha", sid=S1, cwd=w), "ok")
         self.pull("alpha", sid=S2, cwd=w)  # S2의 기준은 지워지기 전의 C0001
         shutil.rmtree(os.path.join(w, ".baton"))  # 예: git clean -fdx
 
@@ -118,7 +118,7 @@ class WipedHistoryTest(HardeningCase):
         d = self.pull("alpha", sid=S1, cwd=w)
         self.assertIsNone(d["latest"])
         self.assertTrue(d["notices"], "이력이 사라진 것을 알리지 않았다")
-        p, d = self.push("alpha", "--approve-plan-change", sid=S1, cwd=w)
+        p, d = self.save("alpha", sid=S1, cwd=w)
         self.assertStatus(p, d, "ok")
         self.assertEqual(d["checkpoint"], "C0002", "지워지기 전의 번호를 다시 썼다")
 

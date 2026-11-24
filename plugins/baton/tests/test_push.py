@@ -24,18 +24,24 @@ class PushCase(BatonCase):
         self.assertStatus(p, d, status)
         return d
 
+    def reviewed(self, session=S1):
+        """고정층이 바뀐 저장. 먼저 diff와 검토값을 받고, 사용자가 저장하기로 하면 그 값으로 다시 부른다."""
+        p, d = self.push("alpha", sid=session, cwd=self.w)
+        self.assertStatus(p, d, "needs_review")
+        return self.push_ok("--review", d["review"], session=session)
+
     def approve_first(self, session=S1):
-        d = self.push_ok("--approve-plan-change", session=session)
+        d = self.reviewed(session)
         self.assertEqual(d["checkpoint"], "C0001")
         return d
 
 
 class FixedLayerTest(PushCase):
-    """G1: 승인 없는 방향 변경은 저장되지 않고, 승인된 변경은 이전 내용과 함께 남는다."""
+    """G1: 방향이 바뀐 저장은 diff를 거쳐야만 사본이 되고, 저장된 변경은 이전 내용과 함께 남는다."""
 
-    def test_first_fixed_layer_needs_approval(self):
+    def test_first_fixed_layer_needs_review(self):
         p, d = self.push("alpha", sid=S1, cwd=self.w)
-        self.assertStatus(p, d, "needs_approval")
+        self.assertStatus(p, d, "needs_review")
         self.assertIn(NON_GOAL, d["fixed_diff"])
         self.assertEqual(self.checkpoint_ids("alpha"), [])
         self.assertTrue(self.approve_first()["plan_changed"])
@@ -54,12 +60,12 @@ class FixedLayerTest(PushCase):
         dropped = make_doc(FIXED.replace(NON_GOAL + "\n", ""), "- S1 끝, UI 시작")
         self.write_doc(self.w, dropped)
         p, d = self.push("alpha", sid=S1, cwd=self.w)
-        self.assertStatus(p, d, "needs_approval")
+        self.assertStatus(p, d, "needs_review")
         self.assertIn(NON_GOAL, d["fixed_diff"])
         self.assertEqual(self.checkpoint_ids("alpha"), ["C0001"])
         self.assertEqual(self.read_doc(self.w), dropped, "헬퍼가 작업 문서를 고쳤다")
 
-        d = self.push_ok("--approve-plan-change")
+        d = self.push_ok("--review", d["review"])
         self.assertEqual(d["checkpoint"], "C0002")
         self.assertTrue(d["plan_changed"])
         self.assertIn(NON_GOAL, self.show("alpha", "C0001"))
@@ -76,18 +82,18 @@ class FixedLayerTest(PushCase):
         swapped = FIXED.replace("- S2 저장 기능 (S1 통과 뒤)\n- S3 UI (S2 완료 뒤)",
                                 "- S3 UI (S2 완료 뒤)\n- S2 저장 기능 (S1 통과 뒤)")
         self.write_doc(self.w, make_doc(swapped))
-        self.assertStatus(*self.push("alpha", sid=S1, cwd=self.w), "needs_approval")
+        self.assertStatus(*self.push("alpha", sid=S1, cwd=self.w), "needs_review")
 
     def test_removing_the_markers_counts_as_a_change(self):
         self.approve_first()
         self.write_doc(self.w, make_doc(None, "- 고정층을 통째로 지움"))
         p, d = self.push("alpha", sid=S1, cwd=self.w)
-        self.assertStatus(p, d, "needs_approval")
+        self.assertStatus(p, d, "needs_review")
         self.assertIn(NON_GOAL, d["fixed_diff"])
 
     def test_unbalanced_marker_is_refused(self):
         self.write_doc(self.w, "# 핸드오프\n\n" + FIXED_START + "\n- 닫는 표시 없음\n")
-        p, d = self.push("alpha", "--approve-plan-change", sid=S1, cwd=self.w)
+        p, d = self.push("alpha", "--review", "0" * 16, sid=S1, cwd=self.w)
         self.assertError(p, d, "fixed_marker_unbalanced")
         self.assertEqual(self.checkpoint_ids("alpha"), [])
 
@@ -108,8 +114,108 @@ class FixedLayerTest(PushCase):
 
         self.write_doc(self.w, "S2\nS1\n", "PLAN.md")
         p, d = self.push("alpha", sid=S1, cwd=self.w)
-        self.assertStatus(p, d, "needs_approval")
+        self.assertStatus(p, d, "needs_review")
         self.assertRegex(d["fixed_diff"], re.compile(r"^[-+]S[12]$", re.M))  # 문맥 줄이 아니라 바뀐 줄
+
+
+class ReviewTest(PushCase):
+    """검토값: 보여 준 변경과 저장되는 내용이 같을 때만 사본을 만든다.
+    사람이 승인했다는 증명이 아니다 — 프로젝트·부모 체크포인트·후보 고정층이 그대로인지 확인할 뿐이다.
+
+    리뷰: Codex PR H2(B의 diff를 본 뒤 C가 저장됨), Claude 평가 R5(첫 호출부터 플래그), 최종 작업안 4.
+    """
+
+    def change_goal(self, word, status="- 시작 전"):
+        self.write_doc(self.w, make_doc(FIXED.replace("호환되는", word), status))
+
+    def ask(self, *flags, key="alpha", cwd=None):
+        p, d = self.push(key, *flags, sid=S1, cwd=cwd or self.w)
+        self.assertStatus(p, d, "needs_review")
+        return d
+
+    def test_changed_after_the_diff_needs_a_new_review(self):
+        self.approve_first()
+        self.change_goal("B안")
+        first = self.ask()
+        self.assertIn("B안", first["fixed_diff"])
+        self.change_goal("C안")  # 사용자가 B의 diff를 보는 사이 문서가 C가 됐다
+        d = self.ask("--review", first["review"])
+        self.assertIn("C안", d["fixed_diff"])
+        self.assertNotEqual(d["review"], first["review"])
+        self.assertEqual(self.checkpoint_ids("alpha"), ["C0001"])
+        d = self.push_ok("--review", d["review"])
+        self.assertEqual(d["checkpoint"], "C0002")
+        self.assertIn("C안", self.show("alpha", "C0002"))
+
+    def test_no_value_or_a_made_up_value_cannot_save(self):
+        self.approve_first()
+        self.change_goal("B안")
+        for flags in ([], ["--review", "0" * 16], ["--review", ""]):
+            with self.subTest(flags=flags):
+                self.ask(*flags)
+                self.assertEqual(self.checkpoint_ids("alpha"), ["C0001"])
+        p, d = self.push("alpha", "--approve-plan-change", sid=S1, cwd=self.w)  # 0.4 초안의 플래그
+        self.assertError(p, d, "approve_flag_removed")
+        self.assertEqual(self.checkpoint_ids("alpha"), ["C0001"])
+
+    def test_first_fixed_layer_cannot_be_saved_in_one_call(self):
+        self.ask("--review", "0" * 16)
+        self.assertEqual(self.checkpoint_ids("alpha"), [])
+
+    def test_review_is_bound_to_the_parent_checkpoint(self):
+        self.approve_first()
+        self.change_goal("B안")
+        token = self.ask()["review"]
+        self.write_doc(self.w, make_doc(FIXED, "- S1 진행"))  # 고정층은 그대로 두고 진행만 저장 → 부모가 C0002가 된다
+        self.assertEqual(self.push_ok()["checkpoint"], "C0002")
+        self.change_goal("B안", "- S1 진행")
+        d = self.ask("--review", token)
+        self.assertNotEqual(d["review"], token)
+        self.assertEqual(self.checkpoint_ids("alpha"), ["C0001", "C0002"])
+
+    def test_review_is_bound_to_the_project(self):
+        self.approve_first()
+        wb = self.make_project("beta", make_doc(FIXED))
+        self.register("beta", wb)
+        self.assertStatus(*self.save("beta", sid=S1, cwd=wb), "ok")
+        self.change_goal("B안")
+        self.write_doc(wb, self.read_doc(self.w))  # 두 프로젝트의 문서가 글자까지 같다
+        token = self.ask()["review"]
+        d = self.ask("--review", token, key="beta", cwd=wb)
+        self.assertNotEqual(d["review"], token)
+        self.assertEqual(self.checkpoint_ids("beta"), ["C0001"])
+
+    def test_same_review_twice_keeps_one_copy(self):
+        self.approve_first()
+        self.change_goal("B안")
+        token = self.ask()["review"]
+        self.assertEqual(self.push_ok("--review", token)["checkpoint"], "C0002")
+        d = self.push_ok("--review", token, status="unchanged")
+        self.assertEqual(d["checkpoint"], "C0002")
+        self.assertEqual(self.checkpoint_ids("alpha"), ["C0001", "C0002"])
+
+    def test_plan_file_at_another_path_is_not_unchanged(self):
+        self.write_doc(self.w, "S1\nS2\n", "PLAN.md")
+        self.assertStatus(*self.jh("set", "alpha", "--plan-doc", "PLAN.md", sid=S1), "ok")
+        self.approve_first()
+        self.write_doc(self.w, "S1\nS2\n", os.path.join("docs", "PLAN2.md"))  # 내용은 같고 경로만 다르다
+        self.assertStatus(*self.jh("set", "alpha", "--plan-doc", os.path.join("docs", "PLAN2.md"), sid=S1), "ok")
+        d = self.ask()
+        self.assertIn("PLAN.md", d["fixed_diff"])
+        self.assertIn("PLAN2.md", d["fixed_diff"])
+        self.assertEqual(self.checkpoint_ids("alpha"), ["C0001"])
+
+    def test_conflict_on_the_plan_file_alone_shows_a_diff(self):
+        self.write_doc(self.w, "S1\nS2\n", "PLAN.md")
+        self.assertStatus(*self.jh("set", "alpha", "--plan-doc", "PLAN.md", sid=S1), "ok")
+        self.approve_first()
+        self.pull("alpha", sid=S2, cwd=self.w)
+        self.write_doc(self.w, "S1\nS2\nS3\n", "PLAN.md")
+        self.assertEqual(self.reviewed()["checkpoint"], "C0002")  # S1이 계획 파일만 바꿔 저장했다
+        self.write_doc(self.w, "S1\nS9\n", "PLAN.md")
+        p, d = self.push("alpha", sid=S2, cwd=self.w)
+        self.assertStatus(p, d, "conflict")
+        self.assertIn("S9", d["diff"])
 
 
 class ConflictTest(PushCase):
