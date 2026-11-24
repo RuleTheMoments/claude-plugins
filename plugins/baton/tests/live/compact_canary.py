@@ -32,7 +32,7 @@ WHERE = {
     "IMPORT": "루트 CLAUDE.md가 @로 import한 파일",
     "LOCAL": "CLAUDE.local.md",
     "NESTED": "하위 폴더의 CLAUDE.md",
-    "READ_OLD": "Read로 읽은 문서(그 뒤 일곱 개를 더 읽음)",
+    "READ_OLD": "Read로 읽은 문서(그 뒤 여덟 개를 더 읽음)",
     "READ_RECENT": "Read로 마지막에 읽은 문서",
 }
 FILLERS = 6

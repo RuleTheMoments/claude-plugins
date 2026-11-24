@@ -611,16 +611,6 @@ def write_binding(sid, key, base):
         return False
 
 
-def drop_binding(sid):
-    """다른 프로젝트로 넘어가려다 바인딩을 쓰지 못했다. 남은 바인딩은 낡았으므로 지워 본다(못 지워도 계속한다)."""
-    p = binding_path(sid)
-    if p:
-        try:
-            os.remove(p)
-        except OSError:
-            pass
-
-
 def binding_writable():
     """바인딩 저장소에 지금 쓸 수 있는가. 쓸 수 없으면 그 사이의 전환이 기록되지 않았을 수 있다."""
     d = BINDING_DIR
@@ -1156,8 +1146,6 @@ def cmd_pull(a):
     bound = write_binding(sid, key, base_of(latest))
     notices = history_notice(proj, cps)
     if sid and not bound:  # 문서는 읽었다. 그러나 다음 키 없는 저장이 이전 프로젝트로 갈 수 있다
-        if previous != key:
-            drop_binding(sid)
         notices.append("%s 문서는 읽었지만 이 세션을 %s에 묶지 못했다%s — 저장할 때는 키를 준다"
                        % (key, key, " (묶여 있던 프로젝트: %s)" % previous if previous and previous != key else ""))
     fixed_state, fixed_note, fixed_diff, doc_changed = fixed_comparison(proj, latest)
